@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import sys
+import traceback
 import uuid
 from pathlib import Path
 from urllib.parse import urlparse
@@ -125,7 +126,8 @@ def ydl_options(extra=None):
 #  yt-dlp wrappers
 # ============================================
 def extract_sync(url):
-    with yt_dlp.YoutubeDL(ydl_options({"skip_download": True})) as ydl:
+    opts = ydl_options({"skip_download": True, "verbose": True})
+    with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False)
     if info is None:
         raise DownloadError("No metadata returned")
@@ -270,10 +272,18 @@ async def process_url(event, url):
     try:
         info = await asyncio.to_thread(extract_sync, url)
     except DownloadError as exc:
+        print("[bot] DownloadError:", file=sys.stderr)
+        traceback.print_exc()
         await event.reply(f"Failed to fetch info: {exc}")
         return
     except Exception as exc:
-        await event.reply(f"Error: {exc}")
+        print("[bot] exception in extract:", file=sys.stderr)
+        traceback.print_exc()
+        msg = str(exc)
+        low = msg.lower()
+        if "i/o error" in low or "unreachable" in low or "reset" in low or "connection" in low:
+            msg = f"Network error (Instagram likely blocks the runner IP): {msg}"
+        await event.reply(f"Error: {msg}")
         return
 
     title = str(info.get("title") or "Instagram media")
