@@ -37,8 +37,10 @@ jobs:
           pip install -r requirements.txt
 
       - name: Write Instagram cookies
-        if: ${{ secrets.IG_COOKIES_B64 != '' }}
-        run: echo "${{ secrets.IG_COOKIES_B64 }}" | base64 -d > cookies.txt
+        env:
+          IG_COOKIES_B64: ${{ secrets.IG_COOKIES_B64 }}
+        if: env.IG_COOKIES_B64 != ''
+        run: echo "$IG_COOKIES_B64" | base64 -d > cookies.txt
 
       - name: Run bot
         env:
