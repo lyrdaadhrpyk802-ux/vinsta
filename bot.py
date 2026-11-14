@@ -72,7 +72,7 @@ def ydl_options(extra=None):
 def download_sync(url, out_dir, token):
     outtmpl = str(out_dir / f"%(title).80B_{token}.%(ext)s")
     opts = ydl_options({
-        "format": "bv*+ba/b", # بهترین کیفیت ویدیو + صدا
+        "format": "best",
         "outtmpl": outtmpl,
         "overwrites": True,
         "noprogress": True,
@@ -117,7 +117,6 @@ async def on_message(event, bot_username):
     if not is_instagram_url(text):
         return
 
-    # ارسال پیام انتظار
     status_msg = await event.reply("⏳")
     
     token = uuid.uuid4().hex[:10]
@@ -125,15 +124,13 @@ async def on_message(event, bot_username):
     
     file_path = None
     try:
-        # دانلود در پس‌زمینه
         info = await asyncio.to_thread(download_sync, text, DOWNLOAD_DIR, token)
         file_path = find_output_file(info, token)
         
         if not file_path or not file_path.exists():
-            await status_msg.delete()
+            await status_msg.edit("Error: File not found after download.")
             return
         
-        # استخراج اطلاعات برای کپشن
         height = info.get("height", 0)
         if not height:
             for fmt in info.get("formats", []):
@@ -148,17 +145,14 @@ async def on_message(event, bot_username):
         
         caption = f"Quality: {quality}\ntime: {time_str}\n@{bot_username}"
         
-        # پاک کردن پیام انتظار
         await status_msg.delete()
-        
-        # ارسال ویدیو
         await bot.send_file(event.chat_id, str(file_path), caption=caption)
         
     except Exception as exc:
         print(f"[bot] error: {exc}", file=sys.stderr)
         try:
-            await status_msg.delete()
-        except:
+            await status_msg.edit(f"Error: {str(exc)[:100]}")
+        except Exception:
             pass
     finally:
         if file_path and file_path.exists():
@@ -196,7 +190,6 @@ async def main():
     bot_username = getattr(me, "username", "bot")
     print(f"[bot] connected as @{bot_username}")
 
-    # ثبت هندلر با ارسال یوزرنیم به عنوان آرگومان
     async def message_handler(event):
         await on_message(event, bot_username)
 
