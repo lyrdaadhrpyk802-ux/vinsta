@@ -1,5 +1,5 @@
 # ============================================
-#  bot.py - Vibe Instagram Downloader (Debug)
+#  bot.py - Vibe Instagram Downloader (Final)
 # ============================================
 
 import asyncio
@@ -8,6 +8,7 @@ import shutil
 import sys
 import uuid
 import traceback
+import subprocess
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -101,6 +102,21 @@ def find_output_file(info, token):
     return candidates[0] if candidates else None
 
 
+def get_duration_sync(file_path):
+    """Extract exact video duration using ffprobe."""
+    try:
+        cmd = [
+            "ffprobe", "-v", "error", "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1", str(file_path)
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        if result.returncode == 0 and result.stdout.strip():
+            return float(result.stdout.strip())
+    except Exception as exc:
+        print(f"[bot] ffprobe error: {exc}")
+    return 0.0
+
+
 async def main():
     token = os.getenv("VIBE_BOT_TOKEN", "").strip()
     if not token:
@@ -127,18 +143,15 @@ async def main():
     bot_username = getattr(me, "username", "bot")
     print(f"[bot] connected as @{bot_username}")
 
-    # ارسال پیام تست به Saved Messages
     try:
         await bot.send_message("me", "Bot started and connected successfully.")
-        print("[bot] test message sent to saved messages")
-    except Exception as exc:
-        print(f"[bot] failed to send test message: {exc}")
+    except Exception:
+        pass
 
-    # ثبت هندلر
     @bot.raw.on(events.NewMessage(incoming=True))
     async def handler(event):
         text = (event.raw_text or "").strip()
-        print(f"[bot] received message from {event.sender_id}: {text[:50]}")
+        print(f"[bot] received message: {text[:50]}")
         
         if text == "/ping":
             await event.reply("pong")
@@ -160,14 +173,20 @@ async def main():
                 await status_msg.edit("Error: File not found.")
                 return
             
-            height = info.get("height", 0) or 1080
+            # Read duration from metadata or fallback to ffprobe
             duration = info.get("duration", 0)
-            time_str = f"{int(duration // 60):02d}:{int(duration % 60):02d}"
-            
+            if not duration or duration <= 0:
+                duration = await asyncio.to_thread(get_duration_sync, file_path)
+
+            minutes = int(duration // 60)
+            seconds = int(duration % 60)
+            time_str = f"{minutes:02d}:{seconds:02d}"
+
+            height = info.get("height", 0) or 1080
             caption = f"Quality: {height}p\ntime: {time_str}\n@{bot_username}"
             
             await status_msg.delete()
-            print(f"[bot] uploading: {file_path}")
+            print(f"[bot] uploading: {file_path} | time: {time_str}")
             await bot.send_file(event.chat_id, str(file_path), caption=caption)
             print("[bot] upload complete")
             
