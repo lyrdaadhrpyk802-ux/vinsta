@@ -1,5 +1,5 @@
 # ============================================
-#  bot.py - Vibe Instagram Downloader (Final)
+#  bot.py - Vibe Instagram Downloader (Auto-Reconnect)
 # ============================================
 
 import asyncio
@@ -103,7 +103,6 @@ def find_output_file(info, token):
 
 
 def get_duration_sync(file_path):
-    """Extract exact video duration using ffprobe."""
     try:
         cmd = [
             "ffprobe", "-v", "error", "-show_entries", "format=duration",
@@ -125,94 +124,97 @@ async def main():
 
     DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-    bot = VibeBot(token=token)
-    print("[bot] connecting...")
-    
-    try:
-        connected = await bot.connect()
-    except Exception as exc:
-        print(f"[bot] error: connect failed: {exc}")
-        traceback.print_exc()
-        sys.exit(1)
+    while True:
+        bot = VibeBot(token=token)
+        print("[bot] connecting...")
         
-    if not connected:
-        print("[bot] error: connect returned False")
-        sys.exit(1)
-
-    me = await bot.get_me()
-    bot_username = getattr(me, "username", "bot")
-    print(f"[bot] connected as @{bot_username}")
-
-    try:
-        await bot.send_message("me", "Bot started and connected successfully.")
-    except Exception:
-        pass
-
-    @bot.raw.on(events.NewMessage(incoming=True))
-    async def handler(event):
-        text = (event.raw_text or "").strip()
-        print(f"[bot] received message: {text[:50]}")
-        
-        if text == "/ping":
-            await event.reply("pong")
-            return
-            
-        if not is_instagram_url(text):
-            return
-
-        status_msg = await event.reply("⏳")
-        token = uuid.uuid4().hex[:10]
-        
-        file_path = None
         try:
-            print(f"[bot] downloading: {text}")
-            info = await asyncio.to_thread(download_sync, text, DOWNLOAD_DIR, token)
-            file_path = find_output_file(info, token)
-            
-            if not file_path:
-                await status_msg.edit("Error: File not found.")
-                return
-            
-            # Read duration from metadata or fallback to ffprobe
-            duration = info.get("duration", 0)
-            if not duration or duration <= 0:
-                duration = await asyncio.to_thread(get_duration_sync, file_path)
+            connected = await bot.connect()
+            if not connected:
+                print("[bot] connect returned False, retrying in 10s...")
+                await asyncio.sleep(10)
+                continue
 
-            minutes = int(duration // 60)
-            seconds = int(duration % 60)
-            time_str = f"{minutes:02d}:{seconds:02d}"
+            me = await bot.get_me()
+            bot_username = getattr(me, "username", "bot")
+            print(f"[bot] connected as @{bot_username}")
 
-            height = info.get("height", 0) or 1080
-            caption = f"Quality: {height}p\ntime: {time_str}\n@{bot_username}"
-            
-            await status_msg.delete()
-            print(f"[bot] uploading: {file_path} | time: {time_str}")
-            await bot.send_file(event.chat_id, str(file_path), caption=caption)
-            print("[bot] upload complete")
-            
-        except Exception as exc:
-            print(f"[bot] error in handler: {exc}")
-            traceback.print_exc()
-            try:
-                await status_msg.edit(f"Error: {str(exc)[:100]}")
-            except:
-                pass
-        finally:
-            if file_path and file_path.exists():
+            @bot.raw.on(events.NewMessage(incoming=True))
+            async def handler(event):
+                text = (event.raw_text or "").strip()
+                print(f"[bot] received message: {text[:50]}")
+                
+                if text == "/ping":
+                    await event.reply("pong")
+                    return
+                    
+                if not is_instagram_url(text):
+                    return
+
+                status_msg = await event.reply("⏳")
+                token = uuid.uuid4().hex[:10]
+                
+                file_path = None
                 try:
-                    file_path.unlink()
-                except OSError:
-                    pass
+                    print(f"[bot] downloading: {text}")
+                    info = await asyncio.to_thread(download_sync, text, DOWNLOAD_DIR, token)
+                    file_path = find_output_file(info, token)
+                    
+                    if not file_path:
+                        await status_msg.edit("Error: File not found.")
+                        return
+                    
+                    duration = info.get("duration", 0)
+                    if not duration or duration <= 0:
+                        duration = await asyncio.to_thread(get_duration_sync, file_path)
 
-    print("[bot] listening for messages")
-    try:
-        await asyncio.wait_for(bot.run_until_disconnected(), timeout=RUN_TIMEOUT_SECONDS)
-    except asyncio.TimeoutError:
-        print("[bot] time limit reached")
-    except KeyboardInterrupt:
-        print("[bot] stopped")
-    finally:
-        await bot.disconnect()
+                    minutes = int(duration // 60)
+                    seconds = int(duration % 60)
+                    time_str = f"{minutes:02d}:{seconds:02d}"
+
+                    height = info.get("height", 0) or 1080
+                    caption = f"Quality: {height}p\ntime: {time_str}\n@{bot_username}"
+                    
+                    await status_msg.delete()
+                    print(f"[bot] uploading: {file_path} | time: {time_str}")
+                    await bot.send_file(event.chat_id, str(file_path), caption=caption)
+                    print("[bot] upload complete")
+                    
+                except Exception as exc:
+                    print(f"[bot] error in handler: {exc}")
+                    traceback.print_exc()
+                    try:
+                        await status_msg.edit(f"Error: {str(exc)[:100]}")
+                    except:
+                        pass
+                finally:
+                    if file_path and file_path.exists():
+                        try:
+                            file_path.unlink()
+                        except OSError:
+                            pass
+
+            print("[bot] listening for messages")
+            # اجرای ربات تا سقف زمان یا قطع شدن
+            await asyncio.wait_for(bot.run_until_disconnected(), timeout=RUN_TIMEOUT_SECONDS)
+            
+            # اگر تایم‌اوت شد (۵:۴۵ صبح/شب گذشت)
+            print("[bot] time limit reached, exiting cleanly")
+            break 
+
+        except asyncio.TimeoutError:
+            print("[bot] time limit reached, exiting cleanly")
+            break
+        except Exception as exc:
+            print(f"[bot] connection crashed: {exc}")
+            traceback.print_exc()
+            print("[bot] reconnecting in 10 seconds...")
+            await asyncio.sleep(10)
+        finally:
+            try:
+                await bot.disconnect()
+            except Exception:
+                pass
 
 if __name__ == "__main__":
     try:
