@@ -1,11 +1,12 @@
 # ============================================
-#  bot.py - Vibe Instagram Downloader (Auto-Reconnect)
+#  bot.py - Vibe Instagram Downloader (Anti-Spam & Auto-Reconnect)
 # ============================================
 
 import asyncio
 import os
 import shutil
 import sys
+import time
 import uuid
 import traceback
 import subprocess
@@ -23,6 +24,13 @@ BASE_DIR = Path(__file__).resolve().parent
 DOWNLOAD_DIR = BASE_DIR / "downloads"
 COOKIE_FILE = BASE_DIR / "cookies.txt"
 RUN_TIMEOUT_SECONDS = 20700
+
+# ============================================
+#  Anti-Spam & Limits Configuration
+# ============================================
+COOLDOWN_SECONDS = 30
+MAX_FILE_SIZE_MB = 50
+LAST_REQUEST = {}
 
 INSTAGRAM_HOSTS = {
     "instagram.com",
@@ -142,7 +150,21 @@ async def main():
             @bot.raw.on(events.NewMessage(incoming=True))
             async def handler(event):
                 text = (event.raw_text or "").strip()
-                print(f"[bot] received message: {text[:50]}")
+                user_id = event.sender_id
+                now = time.time()
+
+                # ----------------------------------------------------
+                # Anti-Spam Check
+                # ----------------------------------------------------
+                if user_id in LAST_REQUEST:
+                    elapsed = now - LAST_REQUEST[user_id]
+                    if elapsed < COOLDOWN_SECONDS:
+                        remaining = int(COOLDOWN_SECONDS - elapsed)
+                        if text != "/ping":
+                            await event.reply(f"⏳ لطفاً {remaining} ثانیه دیگر تلاش کنید.")
+                        return
+                
+                print(f"[bot] received message from {user_id}: {text[:50]}")
                 
                 if text == "/ping":
                     await event.reply("pong")
@@ -151,19 +173,28 @@ async def main():
                 if not is_instagram_url(text):
                     return
 
+                LAST_REQUEST[user_id] = now
                 status_msg = await event.reply("⏳")
-                token = uuid.uuid4().hex[:10]
+                dl_token = uuid.uuid4().hex[:10]
                 
                 file_path = None
                 try:
                     print(f"[bot] downloading: {text}")
-                    info = await asyncio.to_thread(download_sync, text, DOWNLOAD_DIR, token)
-                    file_path = find_output_file(info, token)
+                    info = await asyncio.to_thread(download_sync, text, DOWNLOAD_DIR, dl_token)
+                    file_path = find_output_file(info, dl_token)
                     
                     if not file_path:
                         await status_msg.edit("Error: File not found.")
                         return
                     
+                    # ----------------------------------------------------
+                    # Size Limit Check
+                    # ----------------------------------------------------
+                    size_mb = file_path.stat().st_size / (1024 * 1024)
+                    if size_mb > MAX_FILE_SIZE_MB:
+                        await status_msg.edit(f"Error: File is too large ({size_mb:.1f} MB). Max allowed is {MAX_FILE_SIZE_MB} MB.")
+                        return
+
                     duration = info.get("duration", 0)
                     if not duration or duration <= 0:
                         duration = await asyncio.to_thread(get_duration_sync, file_path)
@@ -176,7 +207,7 @@ async def main():
                     caption = f"Quality: {height}p\ntime: {time_str}\n@{bot_username}"
                     
                     await status_msg.delete()
-                    print(f"[bot] uploading: {file_path} | time: {time_str}")
+                    print(f"[bot] uploading: {file_path} | time: {time_str} | size: {size_mb:.1f}MB")
                     await bot.send_file(event.chat_id, str(file_path), caption=caption)
                     print("[bot] upload complete")
                     
@@ -195,10 +226,7 @@ async def main():
                             pass
 
             print("[bot] listening for messages")
-            # اجرای ربات تا سقف زمان یا قطع شدن
             await asyncio.wait_for(bot.run_until_disconnected(), timeout=RUN_TIMEOUT_SECONDS)
-            
-            # اگر تایم‌اوت شد (۵:۴۵ صبح/شب گذشت)
             print("[bot] time limit reached, exiting cleanly")
             break 
 
