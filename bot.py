@@ -1,5 +1,5 @@
 # ============================================
-#  bot.py - Vibe Instagram Downloader (Simple)
+#  bot.py - Vibe Instagram Downloader (Debug)
 # ============================================
 
 import asyncio
@@ -7,6 +7,7 @@ import os
 import shutil
 import sys
 import uuid
+import traceback
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -17,9 +18,6 @@ from botapi import VibeBot
 from telethon import events
 
 
-# ============================================
-#  Configuration
-# ============================================
 BASE_DIR = Path(__file__).resolve().parent
 DOWNLOAD_DIR = BASE_DIR / "downloads"
 COOKIE_FILE = BASE_DIR / "cookies.txt"
@@ -66,9 +64,6 @@ def ydl_options(extra=None):
     return opts
 
 
-# ============================================
-#  yt-dlp wrappers
-# ============================================
 def download_sync(url, out_dir, token):
     outtmpl = str(out_dir / f"%(title).80B_{token}.%(ext)s")
     opts = ydl_options({
@@ -106,82 +101,24 @@ def find_output_file(info, token):
     return candidates[0] if candidates else None
 
 
-# ============================================
-#  Handlers
-# ============================================
-async def on_message(event, bot_username):
-    text = (event.raw_text or "").strip()
-    if not text or text.startswith("/"):
-        return
-
-    if not is_instagram_url(text):
-        return
-
-    status_msg = await event.reply("⏳")
-    
-    token = uuid.uuid4().hex[:10]
-    DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    
-    file_path = None
-    try:
-        info = await asyncio.to_thread(download_sync, text, DOWNLOAD_DIR, token)
-        file_path = find_output_file(info, token)
-        
-        if not file_path or not file_path.exists():
-            await status_msg.edit("Error: File not found after download.")
-            return
-        
-        height = info.get("height", 0)
-        if not height:
-            for fmt in info.get("formats", []):
-                if fmt.get("height"):
-                    height = max(height, fmt.get("height"))
-        quality = f"{height}p" if height else "Original"
-        
-        duration = info.get("duration", 0)
-        minutes = int(duration // 60)
-        seconds = int(duration % 60)
-        time_str = f"{minutes:02d}:{seconds:02d}"
-        
-        caption = f"Quality: {quality}\ntime: {time_str}\n@{bot_username}"
-        
-        await status_msg.delete()
-        await bot.send_file(event.chat_id, str(file_path), caption=caption)
-        
-    except Exception as exc:
-        print(f"[bot] error: {exc}", file=sys.stderr)
-        try:
-            await status_msg.edit(f"Error: {str(exc)[:100]}")
-        except Exception:
-            pass
-    finally:
-        if file_path and file_path.exists():
-            try:
-                file_path.unlink()
-            except OSError:
-                pass
-
-
-# ============================================
-#  Main
-# ============================================
 async def main():
     token = os.getenv("VIBE_BOT_TOKEN", "").strip()
     if not token:
         print("[bot] error: VIBE_BOT_TOKEN is not set")
         sys.exit(1)
 
-    if not shutil.which("ffmpeg"):
-        print("[bot] warning: ffmpeg not found")
-
     DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
     bot = VibeBot(token=token)
+    print("[bot] connecting...")
+    
     try:
         connected = await bot.connect()
     except Exception as exc:
         print(f"[bot] error: connect failed: {exc}")
+        traceback.print_exc()
         sys.exit(1)
+        
     if not connected:
         print("[bot] error: connect returned False")
         sys.exit(1)
@@ -190,27 +127,73 @@ async def main():
     bot_username = getattr(me, "username", "bot")
     print(f"[bot] connected as @{bot_username}")
 
-    async def message_handler(event):
-        await on_message(event, bot_username)
+    # ارسال پیام تست به Saved Messages
+    try:
+        await bot.send_message("me", "Bot started and connected successfully.")
+        print("[bot] test message sent to saved messages")
+    except Exception as exc:
+        print(f"[bot] failed to send test message: {exc}")
 
-    bot.raw.add_event_handler(message_handler, events.NewMessage(incoming=True))
+    # ثبت هندلر
+    @bot.raw.on(events.NewMessage(incoming=True))
+    async def handler(event):
+        text = (event.raw_text or "").strip()
+        print(f"[bot] received message from {event.sender_id}: {text[:50]}")
+        
+        if text == "/ping":
+            await event.reply("pong")
+            return
+            
+        if not is_instagram_url(text):
+            return
+
+        status_msg = await event.reply("⏳")
+        token = uuid.uuid4().hex[:10]
+        
+        file_path = None
+        try:
+            print(f"[bot] downloading: {text}")
+            info = await asyncio.to_thread(download_sync, text, DOWNLOAD_DIR, token)
+            file_path = find_output_file(info, token)
+            
+            if not file_path:
+                await status_msg.edit("Error: File not found.")
+                return
+            
+            height = info.get("height", 0) or 1080
+            duration = info.get("duration", 0)
+            time_str = f"{int(duration // 60):02d}:{int(duration % 60):02d}"
+            
+            caption = f"Quality: {height}p\ntime: {time_str}\n@{bot_username}"
+            
+            await status_msg.delete()
+            print(f"[bot] uploading: {file_path}")
+            await bot.send_file(event.chat_id, str(file_path), caption=caption)
+            print("[bot] upload complete")
+            
+        except Exception as exc:
+            print(f"[bot] error in handler: {exc}")
+            traceback.print_exc()
+            try:
+                await status_msg.edit(f"Error: {str(exc)[:100]}")
+            except:
+                pass
+        finally:
+            if file_path and file_path.exists():
+                try:
+                    file_path.unlink()
+                except OSError:
+                    pass
 
     print("[bot] listening for messages")
     try:
-        await asyncio.wait_for(
-            bot.run_until_disconnected(),
-            timeout=RUN_TIMEOUT_SECONDS,
-        )
+        await asyncio.wait_for(bot.run_until_disconnected(), timeout=RUN_TIMEOUT_SECONDS)
     except asyncio.TimeoutError:
-        print("[bot] time limit reached, exiting cleanly")
+        print("[bot] time limit reached")
     except KeyboardInterrupt:
-        print("[bot] stopped by user")
+        print("[bot] stopped")
     finally:
-        try:
-            await bot.disconnect()
-        except Exception:
-            pass
-
+        await bot.disconnect()
 
 if __name__ == "__main__":
     try:
