@@ -1,2 +1,4 @@
 git+https://github.com/lyrdaadhrpyk802-ux/vibegram.git
+aiohttp>=3.9
 yt-dlp>=2026.10.26
+python-dotenv>=1.0
